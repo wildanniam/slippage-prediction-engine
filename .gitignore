@@ -17,7 +17,7 @@ env/
 # We will tell Git to ignore the contents of these folders.
 # If you need to track large files, use Git LFS (Large File Storage).
 /data/
-/models/
+
 
 # Operating System files
 .DS_Store
