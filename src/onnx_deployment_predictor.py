@@ -108,17 +108,19 @@ class ONNXPredictor:
             else:
                 model_dir = model_path
             
-            # Construct file paths
+            # Construct file paths - support fallback to model.onnx
             model_file = os.path.join(model_dir, f'{model_type}_model.onnx')
+            if not os.path.exists(model_file):
+                # Fallback to generic model.onnx
+                model_file = os.path.join(model_dir, 'model.onnx')
+                if not os.path.exists(model_file):
+                    raise FileNotFoundError(f"Model file not found: {model_file}")
+                print(f"⚠️ Using generic model.onnx (fallback)")
+            
             scaler_file = os.path.join(model_dir, f'{model_type}_scaler.onnx')
             metadata_file = os.path.join(model_dir, f'{model_type}_metadata.json')
-            features_file = os.path.join(model_dir, 'feature_columns.pkl')  # Keep this as pkl for now
-            
-            # Check if all required files exist
-            if not os.path.exists(model_file):
-                raise FileNotFoundError(f"Model file not found: {model_file}")
-            if not os.path.exists(scaler_file):
-                raise FileNotFoundError(f"Scaler file not found: {scaler_file}")
+            features_json = os.path.join(model_dir, 'features.json')
+            features_file = os.path.join(model_dir, 'feature_columns.pkl')
             
             # Load ONNX model
             print(f"🔄 Loading ONNX model: {model_file}")
@@ -126,33 +128,39 @@ class ONNXPredictor:
                 model_file,
                 providers=['CPUExecutionProvider']  # Use CPU provider for compatibility
             )
-            print(f"✅ Loaded ONNX model: {model_type}")
+            print(f"✅ Loaded ONNX model")
             
-            # Load ONNX scaler
-            print(f"🔄 Loading ONNX scaler: {scaler_file}")
-            self.scaler_session = ort.InferenceSession(
-                scaler_file,
-                providers=['CPUExecutionProvider']
-            )
-            print(f"✅ Loaded ONNX scaler: {model_type}")
+            # Load ONNX scaler (optional - skip if not available)
+            self.scaler_session = None
+            if os.path.exists(scaler_file):
+                print(f"🔄 Loading ONNX scaler: {scaler_file}")
+                self.scaler_session = ort.InferenceSession(
+                    scaler_file,
+                    providers=['CPUExecutionProvider']
+                )
+                print(f"✅ Loaded ONNX scaler")
+            else:
+                print(f"⚠️ Scaler file not found: {scaler_file} - skipping scaling")
             
             # Load metadata if available
             if os.path.exists(metadata_file):
                 with open(metadata_file, 'r') as f:
                     self.metadata = json.load(f)
-                print(f"✅ Loaded metadata: {model_type}")
+                print(f"✅ Loaded metadata")
             
-            # Load feature columns
-            if os.path.exists(features_file):
+            # Load feature columns - prioritize features.json
+            if os.path.exists(features_json):
+                with open(features_json, 'r') as f:
+                    self.feature_columns = json.load(f)
+                print(f"✅ Loaded feature columns from features.json ({len(self.feature_columns)} features)")
+            elif os.path.exists(features_file):
                 self.feature_columns = joblib.load(features_file)
-                print(f"✅ Loaded feature columns ({len(self.feature_columns)} features)")
+                print(f"✅ Loaded feature columns from pickle ({len(self.feature_columns)} features)")
+            elif 'feature_names' in self.metadata:
+                self.feature_columns = self.metadata['feature_names']
+                print(f"✅ Using feature columns from metadata ({len(self.feature_columns)} features)")
             else:
-                # Try to get feature names from metadata
-                if 'feature_names' in self.metadata:
-                    self.feature_columns = self.metadata['feature_names']
-                    print(f"✅ Using feature columns from metadata ({len(self.feature_columns)} features)")
-                else:
-                    raise FileNotFoundError("No feature columns file found and no metadata available")
+                raise FileNotFoundError("No feature columns found in features.json, feature_columns.pkl, or metadata")
             
             # Print model info
             model_inputs = self.model_session.get_inputs()
@@ -160,12 +168,12 @@ class ONNXPredictor:
             print(f"📊 Model input shape: {model_inputs[0].shape}")
             print(f"📊 Model output shape: {model_outputs[0].shape}")
             
-            scaler_inputs = self.scaler_session.get_inputs()
-            print(f"📊 Scaler input shape: {scaler_inputs[0].shape}")
+            if self.scaler_session:
+                scaler_inputs = self.scaler_session.get_inputs()
+                print(f"📊 Scaler input shape: {scaler_inputs[0].shape}")
             
         except Exception as e:
             print(f"❌ Failed to load ONNX models: {e}")
-            print(f"Available model types: lightgbm, random_forest, xgboost")
             raise
     
     def get_market_data(self, exchange_name: str, symbol: str) -> Optional[Dict]:
@@ -336,82 +344,6 @@ class ONNXPredictor:
             if feature in features:
                 features[f'{feature}_log'] = np.log1p(features[feature])
     
-    def load_onnx_models(self, model_path: str = None, model_type: str = 'lightgbm'):
-        """Load ONNX models and supporting files"""
-        try:
-            # Default to models directory if no path specified
-            if model_path is None:
-                model_dir = 'models'
-            else:
-                model_dir = model_path
-            
-            # Construct file paths
-            model_file = os.path.join(model_dir, f'{model_type}_model.onnx')
-            scaler_file = os.path.join(model_dir, f'{model_type}_scaler.onnx')
-            metadata_file = os.path.join(model_dir, f'{model_type}_metadata.json')
-            features_file = os.path.join(model_dir, 'feature_columns.pkl')
-            
-            # Verify files exist
-            if not os.path.exists(model_file):
-                raise FileNotFoundError(f"ONNX model not found: {model_file}")
-            if not os.path.exists(scaler_file):
-                raise FileNotFoundError(f"ONNX scaler not found: {scaler_file}")
-            
-            # Load ONNX model
-            print(f"🔄 Loading ONNX model: {model_file}")
-            self.model_session = ort.InferenceSession(
-                model_file,
-                providers=['CPUExecutionProvider']
-            )
-            
-            # Load ONNX scaler
-            print(f"🔄 Loading ONNX scaler: {scaler_file}")
-            self.scaler_session = ort.InferenceSession(
-                scaler_file,
-                providers=['CPUExecutionProvider']
-            )
-            
-            # Load metadata
-            if os.path.exists(metadata_file):
-                with open(metadata_file, 'r') as f:
-                    self.metadata = json.load(f)
-                print(f"✅ Loaded metadata for {model_type}")
-                
-                # Get feature columns from metadata if available
-                if 'feature_names' in self.metadata:
-                    self.feature_columns = self.metadata['feature_names']
-                    print(f"✅ Using feature columns from metadata ({len(self.feature_columns)} features)")
-            
-            # Load feature columns from pickle file if not in metadata
-            if not self.feature_columns and os.path.exists(features_file):
-                self.feature_columns = joblib.load(features_file)
-                print(f"✅ Loaded feature columns from pickle ({len(self.feature_columns)} features)")
-            
-            if not self.feature_columns:
-                raise FileNotFoundError("No feature columns found in metadata or pickle file")
-            
-            # Print model information
-            model_inputs = self.model_session.get_inputs()
-            model_outputs = self.model_session.get_outputs()
-            scaler_inputs = self.scaler_session.get_inputs()
-            scaler_outputs = self.scaler_session.get_outputs()
-            
-            print(f"📊 Model '{model_type}' loaded successfully:")
-            print(f"   - Model input: {model_inputs[0].name} {model_inputs[0].shape}")
-            print(f"   - Model output: {model_outputs[0].name} {model_outputs[0].shape}")
-            print(f"   - Scaler input: {scaler_inputs[0].name} {scaler_inputs[0].shape}")
-            print(f"   - Scaler output: {scaler_outputs[0].name} {scaler_outputs[0].shape}")
-            print(f"   - Features: {len(self.feature_columns)}")
-            
-            if 'model_performance' in self.metadata:
-                perf = self.metadata['model_performance']
-                print(f"   - Training R²: {perf.get('r2_score', 'N/A'):.4f}")
-                print(f"   - Training MAE: {perf.get('mae', 'N/A'):.6f}")
-                
-        except Exception as e:
-            print(f"❌ Failed to load ONNX models: {e}")
-            raise
-    
     def predict_slippage(self, features: Dict) -> float:
         """Predict slippage using ONNX models"""
         try:
@@ -423,15 +355,19 @@ class ONNXPredictor:
             # Convert to numpy array with correct shape and type
             input_array = np.array([feature_vector], dtype=np.float32)
             
-            # Get input names for ONNX sessions
-            scaler_input_name = self.scaler_session.get_inputs()[0].name
+            # Get input name for ONNX model
             model_input_name = self.model_session.get_inputs()[0].name
             
-            # Apply scaling using ONNX scaler
-            scaled_features = self.scaler_session.run(
-                None, 
-                {scaler_input_name: input_array}
-            )[0]
+            # Apply scaling if scaler is available, otherwise skip
+            if self.scaler_session is not None:
+                scaler_input_name = self.scaler_session.get_inputs()[0].name
+                scaled_features = self.scaler_session.run(
+                    None, 
+                    {scaler_input_name: input_array}
+                )[0]
+            else:
+                # Skip scaling - use features directly
+                scaled_features = input_array
             
             # Make prediction using ONNX model
             prediction = self.model_session.run(
@@ -786,8 +722,12 @@ class TradeCostAPI:
             except Exception as e:
                 return jsonify({'error': str(e)}), 500
     
-    def run(self, host='0.0.0.0', port=5000, debug=False):
+    def run(self, host='0.0.0.0', port=None, debug=False):
         """Run the API server"""
+        # Read port from environment variable (Railway) or use default
+        if port is None:
+            port = int(os.environ.get('PORT', 5000))
+        
         print(f"🚀 Starting ONNX-powered Trade Cost Prediction API on {host}:{port}")
         print(f"🤖 Using model: {self.predictor.model_type}")
         self.app.run(host=host, port=port, debug=debug)
@@ -951,29 +891,33 @@ def main():
         return
     
     try:
-        # Check available models
-        available_models = list_available_models()
-        if not available_models:
-            print("❌ No ONNX models found in 'models' directory")
-            print("Make sure you have converted your models to ONNX format")
-            return
+        # Check for model.onnx (generic) or typed models
+        model_dir = 'models'
+        generic_model = os.path.join(model_dir, 'model.onnx')
         
-        print(f"📦 Available ONNX models: {available_models}")
+        if os.path.exists(generic_model):
+            # Use generic model.onnx
+            model_type = 'lightgbm'  # Default type for generic model
+            print(f"📦 Found generic model.onnx")
+        else:
+            # Check available typed models
+            available_models = list_available_models(model_dir)
+            if not available_models:
+                print("❌ No ONNX models found in 'models' directory")
+                print("Make sure you have model.onnx or {model_type}_model.onnx")
+                return
+            
+            print(f"📦 Available ONNX models: {available_models}")
+            model_type = 'lightgbm' if 'lightgbm' in available_models else available_models[0]
         
-        # Use the best performing model (typically lightgbm)
-        model_type = 'lightgbm' if 'lightgbm' in available_models else available_models[0]
         print(f"🤖 Using model: {model_type}")
         
         # Initialize ONNX predictor
-        predictor = ONNXPredictor(model_path='models', model_type=model_type)
+        predictor = ONNXPredictor(model_path=model_dir, model_type=model_type)
         
-        # Test the system
-        print(f"\n🧪 Running test predictions...")
-        test_onnx_predictor(model_type)
-        
-        # Optional: Run benchmark
-        print(f"\n📊 Would you like to benchmark all models? (Uncomment the line below)")
-        # benchmark_models(model_dir='models', iterations=5)
+        # Skip test in production (comment out for Railway)
+        # print(f"\n🧪 Running test predictions...")
+        # test_onnx_predictor(model_type)
         
         # Start API server
         api = TradeCostAPI(predictor)
@@ -984,7 +928,6 @@ def main():
         print("  GET  /models - Available models information")
         print("  POST /predict - Get trade cost predictions")
         print("  POST /compare - Compare specific exchanges")
-        print("  POST /switch_model - Switch between ONNX models")
         print(f"\nCurrent model: {model_type} (ONNX)")
         print(f"Features: {len(predictor.feature_columns)}")
         
@@ -995,19 +938,14 @@ def main():
   "side": "sell"
 }""")
         
-        print("\nExample request to /switch_model:")
-        print("""{
-  "model_type": "random_forest"
-}""")
-        
-        # Run API server
-        api.run(port=5000, debug=False)
+        # Run API server (port will be read from PORT env var)
+        api.run(debug=False)
         
     except Exception as e:
         print(f"❌ Startup error: {e}")
         print("\nTroubleshooting:")
-        print("1. Make sure ONNX models exist in 'models' directory")
-        print("2. Check that feature_columns.pkl exists")
+        print("1. Make sure model.onnx exists in 'models' directory")
+        print("2. Check that features.json exists")
         print("3. Verify ONNX Runtime is installed: pip install onnxruntime")
 
 # Additional utility functions for ONNX model management
