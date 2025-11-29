@@ -1,5 +1,18 @@
 # API Usage Guide
 
+## Overview
+
+AI-powered Trade Execution Cost Predictor API yang memprediksi **total biaya real** dari cryptocurrency trade, termasuk slippage dan fees. API ini membantu menemukan exchange terbaik untuk execute trade dengan mempertimbangkan:
+
+- **Predicted Slippage**: Estimasi deviasi harga akibat order size dan market depth
+- **Trading Fees**: Fee structure dari setiap exchange
+- **Total Cost**: Total biaya keseluruhan (harga + slippage + fees)
+
+**Use Case:**
+- Bandingkan total cost antar exchange sebelum execute trade
+- Dapatkan rekomendasi exchange terbaik untuk minimize cost
+- Prediksi realistic execution price (bukan hanya advertised price)
+
 ## Base URL
 ```
 https://web-production-97230.up.railway.app
